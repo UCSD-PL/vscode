@@ -64,7 +64,7 @@ class ReplaceAllAction extends Action {
 		this._searchWidget = searchWidget;
 	}
 
-	run(): Promise<any> {
+	override run(): Promise<any> {
 		if (this._searchWidget) {
 			return this._searchWidget.triggerReplaceAll();
 		}
@@ -148,7 +148,7 @@ export class SearchWidget extends Widget {
 	readonly onDidToggleContext: Event<void> = this._onDidToggleContext.event;
 
 	private showContextCheckbox!: Checkbox;
-	private contextLinesInput!: InputBox;
+	public contextLinesInput!: InputBox;
 
 	constructor(
 		container: HTMLElement,
@@ -295,7 +295,7 @@ export class SearchWidget extends Widget {
 		this.toggleReplaceButton = this._register(new Button(parent, opts));
 		this.toggleReplaceButton.element.setAttribute('aria-expanded', 'false');
 		this.toggleReplaceButton.element.classList.add('toggle-replace-button');
-		this.toggleReplaceButton.icon = ThemeIcon.asCSSIcon(searchHideReplaceIcon);
+		this.toggleReplaceButton.icon = searchHideReplaceIcon;
 		// TODO@joao need to dispose this listener eventually
 		this.toggleReplaceButton.onDidClick(() => this.onToggleReplaceButton());
 		this.toggleReplaceButton.element.title = nls.localize('search.replace.toggle.button.title', "Toggle Replace");
@@ -338,7 +338,7 @@ export class SearchWidget extends Widget {
 			const useGlobalFindBuffer = this.searchConfiguration.globalFindClipboard;
 			if (!this.ignoreGlobalFindBufferOnNextFocus && useGlobalFindBuffer) {
 				const globalBufferText = await this.clipboardServce.readFindText();
-				if (this.previousGlobalFindBufferValue !== globalBufferText) {
+				if (globalBufferText && this.previousGlobalFindBufferValue !== globalBufferText) {
 					this.searchInput.inputBox.addToHistory();
 					this.searchInput.setValue(globalBufferText);
 					this.searchInput.select();
@@ -355,7 +355,7 @@ export class SearchWidget extends Widget {
 		this.showContextCheckbox = new Checkbox({
 			isChecked: false,
 			title: appendKeyBindingLabel(nls.localize('showContext', "Toggle Context Lines"), this.keyBindingService.lookupKeybinding(ToggleSearchEditorContextLinesCommandId), this.keyBindingService),
-			icon: ThemeIcon.asCSSIcon(searchShowContextIcon)
+			icon: searchShowContextIcon
 		});
 		this._register(this.showContextCheckbox.onChange(() => this.onContextLinesChanged()));
 
@@ -580,7 +580,7 @@ export class SearchWidget extends Widget {
 			}
 			keyboardEvent.preventDefault();
 		}
-		else if (KeyMod.Shift | KeyCode.Tab) {
+		else if (keyboardEvent.equals(KeyMod.Shift | KeyCode.Tab)) {
 			this.focusRegexAction();
 			keyboardEvent.preventDefault();
 		}
@@ -653,7 +653,7 @@ export class SearchWidget extends Widget {
 		this.onContextLinesChanged();
 	}
 
-	dispose(): void {
+	override dispose(): void {
 		this.setReplaceAllActionState(false);
 		super.dispose();
 	}

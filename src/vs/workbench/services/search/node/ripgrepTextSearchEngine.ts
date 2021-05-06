@@ -199,9 +199,9 @@ export class RipgrepParser extends EventEmitter {
 	}
 
 
-	on(event: 'result', listener: (result: TextSearchResult) => void): this;
-	on(event: 'hitLimit', listener: () => void): this;
-	on(event: string, listener: (...args: any[]) => void): this {
+	override on(event: 'result', listener: (result: TextSearchResult) => void): this;
+	override on(event: 'hitLimit', listener: () => void): this;
+	override on(event: string, listener: (...args: any[]) => void): this {
 		super.on(event, listener);
 		return this;
 	}
@@ -385,13 +385,7 @@ function getRgArgs(query: TextSearchQuery, options: TextSearchOptions): string[]
 
 	if (otherIncludes && otherIncludes.length) {
 		const uniqueOthers = new Set<string>();
-		otherIncludes.forEach(other => {
-			if (!other.endsWith('/**')) {
-				other += '/**';
-			}
-
-			uniqueOthers.add(other);
-		});
+		otherIncludes.forEach(other => { uniqueOthers.add(other); });
 
 		args.push('-g', '!*');
 		uniqueOthers
@@ -508,10 +502,6 @@ function getRgArgs(query: TextSearchQuery, options: TextSearchOptions): string[]
  */
 export function spreadGlobComponents(globArg: string): string[] {
 	const components = splitGlobAware(globArg, '/');
-	if (components[components.length - 1] !== '**') {
-		components.push('**');
-	}
-
 	return components.map((_, i) => components.slice(0, i + 1).join('/'));
 }
 
