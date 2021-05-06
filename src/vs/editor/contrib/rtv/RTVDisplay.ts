@@ -47,7 +47,7 @@ import { Button } from 'vs/base/browser/ui/button/button';
 import { attachButtonStyler } from 'vs/platform/theme/common/styler';
 import { RTVSynth } from './RTVSynth';
 
-const htmlPolicy = window.trustedTypes?.createPolicy('rtv', { createHTML(value) { return value } } );
+const htmlPolicy = window.trustedTypes?.createPolicy('rtv', { createHTML: (value) => value } );
 
 function indent(s: string): number {
 	return s.length - s.trimLeft().length;
