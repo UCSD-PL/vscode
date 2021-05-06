@@ -48,6 +48,8 @@ import { attachButtonStyler } from 'vs/platform/theme/common/styler';
 import { RTVSynth } from './RTVSynth';
 import { Emitter, Event } from 'vs/base/common/event';
 
+const htmlPolicy = window.trustedTypes?.createPolicy('rtv', { createHTML: (value) => value } );
+
 function indent(s: string): number {
 	return s.length - s.trimLeft().length;
 }
@@ -283,7 +285,7 @@ class RTVOutputDisplayBox {
 		this._box.style.right = '14px';
 		this._box.style.height = 'auto';
 		this._box.style.width = '500px';
-		this._box.innerHTML = this._html;
+		this._box.innerHTML = htmlPolicy ? htmlPolicy.createHTML(this._html) as unknown as string : this._html;
 		this._box.style.display = 'inline-block';
 		this._box.style.overflowY = 'scroll';
 		this._box.style.overflowX = 'auto';
@@ -320,7 +322,7 @@ class RTVOutputDisplayBox {
 	}
 
 	public setContent(s: string): void {
-		this._box.innerHTML = s;
+		this._box.innerHTML = htmlPolicy ? htmlPolicy.createHTML(s) as unknown as string : s;
 	}
 
 	public getContent(): string {
@@ -328,7 +330,7 @@ class RTVOutputDisplayBox {
 	}
 
 	public clearContent(): void {
-		this._box.innerHTML = this._html;
+		this._box.innerHTML = htmlPolicy ? htmlPolicy.createHTML(this._html) as unknown as string : this._html;
 	}
 
 	public show(): void {
@@ -816,11 +818,12 @@ class RTVDisplayBox implements IRTVDisplayBox {
 			// Otherwise, the divs in a row could become invisible if they are
 			// all empty
 			cellContent = document.createElement('div');
-			cellContent.innerHTML = '&nbsp';
+			cellContent.innerHTML = htmlPolicy ? htmlPolicy.createHTML('&nbsp') as unknown as string : '&nbsp';
 		}
 		else if (isHtmlEscape(s)) {
 			cellContent = document.createElement('div');
-			cellContent.innerHTML = removeHtmlEscape(s);
+			const innerHTML = removeHtmlEscape(s);
+			cellContent.innerHTML = htmlPolicy ? htmlPolicy.createHTML(innerHTML) as unknown as string : innerHTML;
 		} else {
 			let renderedText = r.render(new MarkdownString(s));
 			cellContent = renderedText.element;
@@ -1403,7 +1406,7 @@ class RTVDisplayBox implements IRTVDisplayBox {
 		let addButton = document.createElement('div');
 		menubar.appendChild(addButton);
 		addButton.className = 'menubar-menu-button';
-		addButton.innerHTML = '+';
+		addButton.innerHTML = htmlPolicy ? htmlPolicy.createHTML('+') as unknown as string : '+';
 		addButton.onclick = (e) => {
 			e.stopImmediatePropagation();
 			this._controller.contextMenuService.showContextMenu({

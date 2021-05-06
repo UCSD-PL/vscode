@@ -10,7 +10,7 @@ import { IFilesConfiguration, SortOrder } from 'vs/workbench/contrib/files/commo
 import { ExplorerItem, ExplorerModel } from 'vs/workbench/contrib/files/common/explorerModel';
 import { URI } from 'vs/base/common/uri';
 import { FileOperationEvent, FileOperation, IFileService, FileChangesEvent, FileChangeType, IResolveFileOptions } from 'vs/platform/files/common/files';
-import { dirname } from 'vs/base/common/resources';
+import { dirname, basename } from 'vs/base/common/resources';
 import { IConfigurationService, IConfigurationChangeEvent } from 'vs/platform/configuration/common/configuration';
 import { IClipboardService } from 'vs/platform/clipboard/common/clipboardService';
 import { IEditorService } from 'vs/workbench/services/editor/common/editorService';
@@ -19,7 +19,7 @@ import { IUriIdentityService } from 'vs/workbench/services/uriIdentity/common/ur
 import { IBulkEditService, ResourceFileEdit } from 'vs/editor/browser/services/bulkEditService';
 import { UndoRedoSource } from 'vs/platform/undoRedo/common/undoRedo';
 import { IExplorerView, IExplorerService } from 'vs/workbench/contrib/files/browser/files';
-import { IProgressService, ProgressLocation } from 'vs/platform/progress/common/progress';
+import { IProgressService, ProgressLocation, IProgressNotificationOptions, IProgressCompositeOptions } from 'vs/platform/progress/common/progress';
 import { CancellationTokenSource } from 'vs/base/common/cancellation';
 import { RunOnceScheduler } from 'vs/base/common/async';
 
@@ -28,7 +28,7 @@ export const UNDO_REDO_SOURCE = new UndoRedoSource();
 export class ExplorerService implements IExplorerService {
 	declare readonly _serviceBrand: undefined;
 
-	private static readonly EXPLORER_FILE_CHANGES_REACT_DELAY = 1000; // delay in ms to react to file changes to give our internal events a chance to react first
+	private static readonly EXPLORER_FILE_CHANGES_REACT_DELAY = 500; // delay in ms to react to file changes to give our internal events a chance to react first
 
 	private readonly disposables = new DisposableStore();
 	private editable: { stat: ExplorerItem, data: IEditableData } | undefined;
@@ -60,15 +60,30 @@ export class ExplorerService implements IExplorerService {
 			this.fileChangeEvents = [];
 
 			// Filter to the ones we care
-			const types = [FileChangeType.ADDED, FileChangeType.DELETED];
+			const types = [FileChangeType.DELETED];
 			if (this._sortOrder === SortOrder.Modified) {
 				types.push(FileChangeType.UPDATED);
 			}
 
 			let shouldRefresh = false;
+			// For DELETED and UPDATED events go through the explorer model and check if any of the items got affected
 			this.roots.forEach(r => {
 				if (this.view && !shouldRefresh) {
 					shouldRefresh = doesFileEventAffect(r, this.view, events, types);
+				}
+			});
+			// For ADDED events we need to go through all the events and check if the explorer is already aware of some of them
+			// Or if they affect not yet resolved parts of the explorer. If that is the case we will not refresh.
+			events.forEach(e => {
+				if (!shouldRefresh) {
+					const added = e.getAdded();
+					if (added.some(a => {
+						const parent = this.model.findClosest(dirname(a.resource));
+						// Parent of the added resource is resolved and the explorer model is not aware of the added resource - we need to refresh
+						return parent && !parent.getChild(basename(a.resource));
+					})) {
+						shouldRefresh = true;
+					}
 				}
 			});
 
@@ -95,7 +110,7 @@ export class ExplorerService implements IExplorerService {
 			});
 			if (affected) {
 				if (this.view) {
-					await this.view.refresh(true);
+					await this.view.setTreeInput();
 				}
 			}
 		}));
@@ -125,19 +140,20 @@ export class ExplorerService implements IExplorerService {
 		return this.view.getContext(respectMultiSelection);
 	}
 
-	async applyBulkEdit(edit: ResourceFileEdit[], options: { undoLabel: string, progressLabel: string }): Promise<void> {
+	async applyBulkEdit(edit: ResourceFileEdit[], options: { undoLabel: string, progressLabel: string, confirmBeforeUndo?: boolean, progressLocation?: ProgressLocation.Explorer | ProgressLocation.Window }): Promise<void> {
 		const cancellationTokenSource = new CancellationTokenSource();
-		const promise = this.progressService.withProgress({
-			location: ProgressLocation.Window,
-			delay: 500,
+		const promise = this.progressService.withProgress(<IProgressNotificationOptions | IProgressCompositeOptions>{
+			location: options.progressLocation || ProgressLocation.Window,
 			title: options.progressLabel,
-			cancellable: edit.length > 1 // Only allow cancellation when there is more than one edit. Since cancelling will not actually stop the current edit that is in progress.
+			cancellable: edit.length > 1, // Only allow cancellation when there is more than one edit. Since cancelling will not actually stop the current edit that is in progress.
+			delay: 500,
 		}, async progress => {
 			await this.bulkEditService.apply(edit, {
 				undoRedoSource: UNDO_REDO_SOURCE,
 				label: options.undoLabel,
 				progress,
-				token: cancellationTokenSource.token
+				token: cancellationTokenSource.token,
+				confirmBeforeUndo: options.confirmBeforeUndo
 			});
 		}, () => cancellationTokenSource.cancel());
 		await this.progressService.withProgress({ location: ProgressLocation.Explorer, delay: 500 }, () => promise);
@@ -152,6 +168,12 @@ export class ExplorerService implements IExplorerService {
 
 	findClosest(resource: URI): ExplorerItem | null {
 		return this.model.findClosest(resource);
+	}
+
+	findClosestRoot(resource: URI): ExplorerItem | null {
+		const parentRoots = this.model.roots.filter(r => this.uriIdentityService.extUri.isEqualOrParent(resource, r.resource))
+			.sort((first, second) => second.resource.path.length - first.resource.path.length);
+		return parentRoots.length ? parentRoots[0] : null;
 	}
 
 	async setEditable(stat: ExplorerItem, data: IEditableData | null): Promise<void> {
@@ -205,16 +227,13 @@ export class ExplorerService implements IExplorerService {
 
 		// Stat needs to be resolved first and then revealed
 		const options: IResolveFileOptions = { resolveTo: [resource], resolveMetadata: this.sortOrder === SortOrder.Modified };
-		const workspaceFolder = this.contextService.getWorkspaceFolder(resource);
-		if (workspaceFolder === null) {
-			return Promise.resolve(undefined);
+		const root = this.findClosestRoot(resource);
+		if (!root) {
+			return undefined;
 		}
-		const rootUri = workspaceFolder.uri;
-
-		const root = this.roots.find(r => this.uriIdentityService.extUri.isEqual(r.resource, rootUri))!;
 
 		try {
-			const stat = await this.fileService.resolve(rootUri, options);
+			const stat = await this.fileService.resolve(root.resource, options);
 
 			// Convert to model
 			const modelStat = ExplorerItem.create(this.fileService, stat, undefined, options.resolveTo);
@@ -257,7 +276,7 @@ export class ExplorerService implements IExplorerService {
 			if (parents.length) {
 
 				// Add the new file to its parent (Model)
-				parents.forEach(async p => {
+				await Promise.all(parents.map(async p => {
 					// We have to check if the parent is resolved #29177
 					const resolveMetadata = this.sortOrder === `modified`;
 					if (!p.isDirectoryResolved) {
@@ -274,7 +293,7 @@ export class ExplorerService implements IExplorerService {
 					p.addChild(childElement);
 					// Refresh the Parent (View)
 					await this.view?.refresh(false, p);
-				});
+				}));
 			}
 		}
 
@@ -302,12 +321,12 @@ export class ExplorerService implements IExplorerService {
 
 				if (newParents.length && modelElements.length) {
 					// Move in Model
-					modelElements.forEach(async (modelElement, index) => {
+					await Promise.all(modelElements.map(async (modelElement, index) => {
 						const oldParent = modelElement.parent;
 						modelElement.move(newParents[index]);
 						await this.view?.refresh(false, oldParent);
 						await this.view?.refresh(false, newParents[index]);
-					});
+					}));
 				}
 			}
 		}
@@ -315,7 +334,7 @@ export class ExplorerService implements IExplorerService {
 		// Delete
 		else if (e.isOperation(FileOperation.DELETE)) {
 			const modelElements = this.model.findAll(e.resource);
-			modelElements.forEach(async element => {
+			await Promise.all(modelElements.map(async element => {
 				if (element.parent) {
 					const parent = element.parent;
 					// Remove Element from Parent (Model)
@@ -324,7 +343,7 @@ export class ExplorerService implements IExplorerService {
 					// Refresh Parent (View)
 					await this.view?.refresh(false, parent);
 				}
-			});
+			}));
 		}
 	}
 
@@ -345,11 +364,11 @@ export class ExplorerService implements IExplorerService {
 }
 
 function doesFileEventAffect(item: ExplorerItem, view: IExplorerView, events: FileChangesEvent[], types: FileChangeType[]): boolean {
-	if (events.some(e => e.affects(item.resource, ...types))) {
-		return true;
-	}
 	for (let [_name, child] of item.children) {
 		if (view.isItemVisible(child)) {
+			if (events.some(e => e.contains(child.resource, ...types))) {
+				return true;
+			}
 			if (child.isDirectory && child.isDirectoryResolved) {
 				if (doesFileEventAffect(child, view, events, types)) {
 					return true;

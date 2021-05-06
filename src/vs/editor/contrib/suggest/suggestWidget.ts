@@ -5,7 +5,7 @@
 
 import 'vs/css!./media/suggest';
 import 'vs/base/browser/ui/codicons/codiconStyles'; // The codicon symbol styles are defined here and must be loaded
-import 'vs/editor/contrib/documentSymbols/outlineTree'; // The codicon symbol colors are defined here and must be loaded
+import 'vs/editor/contrib/symbolIcons/symbolIcons'; // The codicon symbol colors are defined here and must be loaded to get colors
 import * as nls from 'vs/nls';
 import * as strings from 'vs/base/common/strings';
 import * as dom from 'vs/base/browser/dom';
@@ -21,7 +21,7 @@ import { Context as SuggestContext, CompletionItem } from './suggest';
 import { CompletionModel } from './completionModel';
 import { attachListStyler } from 'vs/platform/theme/common/styler';
 import { IThemeService, IColorTheme, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
-import { registerColor, editorWidgetBackground, listFocusBackground, activeContrastBorder, listHighlightForeground, editorForeground, editorWidgetBorder, focusBorder, textLinkForeground, textCodeBlockBackground } from 'vs/platform/theme/common/colorRegistry';
+import { registerColor, editorWidgetBackground, quickInputListFocusBackground, activeContrastBorder, listHighlightForeground, editorForeground, editorWidgetBorder, focusBorder, textLinkForeground, textCodeBlockBackground } from 'vs/platform/theme/common/colorRegistry';
 import { IStorageService, StorageScope, StorageTarget } from 'vs/platform/storage/common/storage';
 import { TimeoutTimer, CancelablePromise, createCancelablePromise, disposableTimeout } from 'vs/base/common/async';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
@@ -40,7 +40,7 @@ import { clamp } from 'vs/base/common/numbers';
 export const editorSuggestWidgetBackground = registerColor('editorSuggestWidget.background', { dark: editorWidgetBackground, light: editorWidgetBackground, hc: editorWidgetBackground }, nls.localize('editorSuggestWidgetBackground', 'Background color of the suggest widget.'));
 export const editorSuggestWidgetBorder = registerColor('editorSuggestWidget.border', { dark: editorWidgetBorder, light: editorWidgetBorder, hc: editorWidgetBorder }, nls.localize('editorSuggestWidgetBorder', 'Border color of the suggest widget.'));
 export const editorSuggestWidgetForeground = registerColor('editorSuggestWidget.foreground', { dark: editorForeground, light: editorForeground, hc: editorForeground }, nls.localize('editorSuggestWidgetForeground', 'Foreground color of the suggest widget.'));
-export const editorSuggestWidgetSelectedBackground = registerColor('editorSuggestWidget.selectedBackground', { dark: listFocusBackground, light: listFocusBackground, hc: listFocusBackground }, nls.localize('editorSuggestWidgetSelectedBackground', 'Background color of the selected entry in the suggest widget.'));
+export const editorSuggestWidgetSelectedBackground = registerColor('editorSuggestWidget.selectedBackground', { dark: quickInputListFocusBackground, light: quickInputListFocusBackground, hc: quickInputListFocusBackground }, nls.localize('editorSuggestWidgetSelectedBackground', 'Background color of the selected entry in the suggest widget.'));
 export const editorSuggestWidgetHighlightForeground = registerColor('editorSuggestWidget.highlightForeground', { dark: listHighlightForeground, light: listHighlightForeground, hc: listHighlightForeground }, nls.localize('editorSuggestWidgetHighlightForeground', 'Color of the match highlights in the suggest widget.'));
 
 const enum State {
@@ -103,7 +103,7 @@ export class SuggestWidget implements IDisposable {
 	private _focusedItem?: CompletionItem;
 	private _ignoreFocusEvents: boolean = false;
 	private _completionModel?: CompletionModel;
-	private _cappedHeight?: { wanted: number, capped: number };
+	private _cappedHeight?: { wanted: number; capped: number; };
 	private _explainMode: boolean = false;
 
 	readonly element: ResizableHTMLElement;
@@ -217,12 +217,12 @@ export class SuggestWidget implements IDisposable {
 			getHeight: (_element: CompletionItem): number => this.getLayoutInfo().itemHeight,
 			getTemplateId: (_element: CompletionItem): string => 'suggestion'
 		}, [renderer], {
+			alwaysConsumeMouseWheel: true,
 			useShadows: false,
 			mouseSupport: false,
 			accessibilityProvider: {
 				getRole: () => 'option',
 				getAriaLabel: (item: CompletionItem) => {
-					const textLabel = typeof item.completion.label === 'string' ? item.completion.label : item.completion.label.name;
 					if (item.isResolved && this._isDetailsVisible()) {
 						const { documentation, detail } = item.completion;
 						const docs = strings.format(
@@ -230,9 +230,9 @@ export class SuggestWidget implements IDisposable {
 							detail || '',
 							documentation ? (typeof documentation === 'string' ? documentation : documentation.value) : '');
 
-						return nls.localize('ariaCurrenttSuggestionReadDetails', "{0}, docs: {1}", textLabel, docs);
+						return nls.localize('ariaCurrenttSuggestionReadDetails', "{0}, docs: {1}", item.textLabel, docs);
 					} else {
-						return textLabel;
+						return item.textLabel;
 					}
 				},
 				getWidgetAriaLabel: () => nls.localize('suggest', "Suggest"),
@@ -436,9 +436,11 @@ export class SuggestWidget implements IDisposable {
 			case State.Hidden:
 				dom.hide(this._messageElement, this._listElement, this._status.element);
 				this._details.hide(true);
+				this._status.hide();
 				this._contentWidget.hide();
 				this._ctxSuggestWidgetVisible.reset();
 				this._ctxSuggestWidgetMultipleSuggestions.reset();
+				this._showTimeout.cancel();
 				this.element.domNode.classList.remove('visible');
 				this._list.splice(0, this._list.length);
 				this._focusedItem = undefined;
@@ -483,6 +485,7 @@ export class SuggestWidget implements IDisposable {
 	}
 
 	private _show(): void {
+		this._status.show();
 		this._contentWidget.show();
 		this._layout(this._persistedSize.restore());
 		this._ctxSuggestWidgetVisible.set(true);
@@ -667,7 +670,7 @@ export class SuggestWidget implements IDisposable {
 			this._details.hide();
 			this.element.domNode.classList.remove('shows-details');
 
-		} else if (canExpandCompletionItem(this._list.getFocusedElements()[0]) && (this._state === State.Open || this._state === State.Details || this._state === State.Frozen)) {
+		} else if ((canExpandCompletionItem(this._list.getFocusedElements()[0]) || this._explainMode) && (this._state === State.Open || this._state === State.Details || this._state === State.Frozen)) {
 			// show details widget (iff possible)
 			this._ctxSuggestWidgetDetailsVisible.set(true);
 			this._setDetailsVisible(true);
@@ -688,9 +691,13 @@ export class SuggestWidget implements IDisposable {
 	}
 
 	toggleExplainMode(): void {
-		if (this._list.getFocusedElements()[0] && this._isDetailsVisible()) {
+		if (this._list.getFocusedElements()[0]) {
 			this._explainMode = !this._explainMode;
-			this.showDetails(false);
+			if (!this._isDetailsVisible()) {
+				this.toggleDetails();
+			} else {
+				this.showDetails(false);
+			}
 		}
 	}
 
@@ -702,6 +709,15 @@ export class SuggestWidget implements IDisposable {
 		this._loadingTimeout?.dispose();
 		this._setState(State.Hidden);
 		this._onDidHide.fire(this);
+		this.element.clearSashHoverState();
+
+		// ensure that a reasonable widget height is persisted so that
+		// accidential "resize-to-single-items" cases aren't happening
+		const dim = this._persistedSize.restore();
+		const minPersistedHeight = Math.ceil(this.getLayoutInfo().itemHeight * 4.3);
+		if (dim && dim.height < minPersistedHeight) {
+			this._persistedSize.store(dim.with(undefined, minPersistedHeight));
+		}
 	}
 
 	isFrozen(): boolean {
@@ -734,11 +750,15 @@ export class SuggestWidget implements IDisposable {
 			return;
 		}
 
-		let height = size?.height;
-		let width = size?.width;
-
 		const bodyBox = dom.getClientArea(document.body);
 		const info = this.getLayoutInfo();
+
+		if (!size) {
+			size = info.defaultSize;
+		}
+
+		let height = size.height;
+		let width = size.width;
 
 		// status bar
 		this._status.element.style.lineHeight = `${info.itemHeight}px`;
@@ -756,9 +776,6 @@ export class SuggestWidget implements IDisposable {
 
 			// width math
 			const maxWidth = bodyBox.width - info.borderHeight - 2 * info.horizontalPadding;
-			if (width === undefined) {
-				width = info.defaultSize.width;
-			}
 			if (width > maxWidth) {
 				width = maxWidth;
 			}
@@ -766,7 +783,6 @@ export class SuggestWidget implements IDisposable {
 
 			// height math
 			const fullHeight = info.statusBarHeight + this._list.contentHeight + info.borderHeight;
-			const preferredHeight = info.defaultSize.height;
 			const minHeight = info.itemHeight + info.statusBarHeight;
 			const editorBox = dom.getDomNodePagePosition(this.editor.getDomNode());
 			const cursorBox = this.editor.getScrolledVisiblePosition(this.editor.getPosition());
@@ -775,15 +791,12 @@ export class SuggestWidget implements IDisposable {
 			const maxHeightAbove = Math.min(editorBox.top + cursorBox.top - info.verticalPadding, fullHeight);
 			let maxHeight = Math.min(Math.max(maxHeightAbove, maxHeightBelow) + info.borderHeight, fullHeight);
 
-			if (height && height === this._cappedHeight?.capped) {
+			if (height === this._cappedHeight?.capped) {
 				// Restore the old (wanted) height when the current
 				// height is capped to fit
 				height = this._cappedHeight.wanted;
 			}
 
-			if (height === undefined) {
-				height = Math.min(preferredHeight, fullHeight);
-			}
 			if (height < minHeight) {
 				height = minHeight;
 			}
@@ -801,14 +814,14 @@ export class SuggestWidget implements IDisposable {
 				this.element.enableSashes(false, true, true, false);
 				maxHeight = maxHeightBelow;
 			}
-			this.element.preferredSize = new dom.Dimension(preferredWidth, preferredHeight);
+			this.element.preferredSize = new dom.Dimension(preferredWidth, info.defaultSize.height);
 			this.element.maxSize = new dom.Dimension(maxWidth, maxHeight);
 			this.element.minSize = new dom.Dimension(220, minHeight);
 
 			// Know when the height was capped to fit and remember
 			// the wanted height for later. This is required when going
 			// left to widen suggestions.
-			this._cappedHeight = size && height === fullHeight
+			this._cappedHeight = height === fullHeight
 				? { wanted: this._cappedHeight?.wanted ?? size.height, capped: height }
 				: undefined;
 		}
