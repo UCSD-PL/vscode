@@ -22,6 +22,7 @@ module.exports.all = [
 	'!out*/**',
 	'!test/**/out/**',
 	'!**/node_modules/**',
+	'!src/__pycache__/**'
 ];
 
 module.exports.indentationFilter = [
@@ -123,6 +124,9 @@ module.exports.copyrightFilter = [
 	'!extensions/html-language-features/server/src/modes/typescript/*',
 	'!extensions/*/server/bin/*',
 	'!src/vs/editor/test/node/classification/typescript-test.ts',
+	'!src/vs/editor/contrib/rtv/**',
+	'!src/*.py',
+	'!test/rtv/**'
 ];
 
 module.exports.jsHygieneFilter = [
