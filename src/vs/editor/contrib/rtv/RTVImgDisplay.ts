@@ -1,11 +1,10 @@
 import { IEditorContribution } from 'vs/editor/common/editorCommon';
 import { registerEditorContribution } from 'vs/editor/browser/editorExtensions';
 import { ICodeEditor, IEditorMouseEvent } from 'vs/editor/browser/editorBrowser';
-import { DelayedRunAtMostOne } from 'vs/editor/contrib/rtv/RTVDisplay';
+import { DelayedRunAtMostOne, htmlPolicy } from 'vs/editor/contrib/rtv/RTVDisplay';
 import { ITextModel } from 'vs/editor/common/model';
-import { Process, IRTVLogger } from 'vs/editor/contrib/rtv/RTVInterfaces';
-
-import * as utils from 'vs/editor/contrib/rtv/RTVUtils';
+import { Utils, IRTVLogger, RunProcess } from 'vs/editor/contrib/rtv/RTVInterfaces';
+import { getUtils } from 'vs/editor/contrib/rtv/RTVUtils';
 
 class RTVImgDisplayBox {
 	private _box: HTMLDivElement;
@@ -20,7 +19,7 @@ class RTVImgDisplayBox {
 			throw new Error('Cannot find Monaco Editor');
 		}
 		this._box = document.createElement('div');
-		this._box.innerHTML = html;
+		this._box.innerHTML = htmlPolicy ? htmlPolicy.createHTML(html) as unknown as string: html;
 		this._box.style.position = 'absolute';
 		this._box.style.top = top + 'px';
 		this._box.style.left = left + 'px';
@@ -37,15 +36,16 @@ class RTVImgController implements IEditorContribution {
 
 	public static readonly ID = 'editor.contrib.rtvImgDisplay';
 	private _displayImg: DelayedRunAtMostOne = new DelayedRunAtMostOne();
-	private _pythonProcess?: Process = undefined;
+	private _pythonProcess?: RunProcess = undefined;
 	private _imgDisplayBox: RTVImgDisplayBox | undefined;
 	public logger: IRTVLogger;
+	public utils: Utils = getUtils();
 
 	constructor(
 		private readonly _editor: ICodeEditor,
 	) {
 		this._editor.onMouseMove(e => this.onMouseMove(e));
-		this.logger = utils.getLogger(_editor);
+		this.logger = this.utils.logger(_editor);
 	}
 
 	private onMouseMove(e: IEditorMouseEvent): void {
@@ -75,7 +75,7 @@ class RTVImgController implements IEditorContribution {
 		}
 
 		let varname = word.word;
-		this._displayImg.run(500, () => {
+		this._displayImg.run(500, async () => {
 			//console.log("(" + e.event.posx + "," + e.event.posy + ")");
 
 			let model = this._editor.getModel();
@@ -92,27 +92,28 @@ class RTVImgController implements IEditorContribution {
 			}
 
 			this.logger.imgSummaryStart(lineNumber, varname);
-			let c = utils.runImgSummary(program, lineNumber, varname);
-			this._pythonProcess = c;
+			this._pythonProcess = this.utils.runImgSummary(program, lineNumber, varname);
 
+			const runResults = await this._pythonProcess;
+			const exitCode = runResults.exitCode;
+			const result = runResults.result;
 
-			c.onExit((exitCode, result) => {
-				this.logger.imgSummaryEnd(result);
-				// When exitCode === null, it means the process was killed,
-				// so there is nothing else to do
-				if (exitCode !== null) {
-					this._pythonProcess = undefined;
-					if (exitCode === 0 && result !== undefined) {
-						if (this._imgDisplayBox) {
-							this._imgDisplayBox.destroy();
-						}
-						this._imgDisplayBox = new RTVImgDisplayBox(this._editor, result,  top, left);
+			this.logger.imgSummaryEnd(result);
+
+			// When exitCode === null, it means the process was killed,
+			// so there is nothing else to do
+			if (exitCode !== null) {
+				this._pythonProcess = undefined;
+				if (exitCode === 0 && result !== undefined) {
+					if (this._imgDisplayBox) {
+						this._imgDisplayBox.destroy();
 					}
-					else {
-					}
+
+					this._imgDisplayBox = new RTVImgDisplayBox(this._editor, result,  top, left);
+				} else {
+					// TODO Error handling
 				}
-			});
-
+			}
 		})
 		.catch((_err) => {});
 	}

@@ -1,90 +1,12 @@
 import { Range } from 'vs/editor/common/core/range';
 import { Selection } from 'vs/editor/common/core/selection';
 import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
-import * as utils from 'vs/editor/contrib/rtv/RTVUtils';
-import { SynthResult, SynthProblem, IRTVLogger, IRTVController, IRTVDisplayBox, Process, ViewMode } from './RTVInterfaces';
+import { getUtils } from 'vs/editor/contrib/rtv/RTVUtils';
+import { Utils, RunResult, SynthResult, SynthProblem, IRTVLogger, IRTVController, IRTVDisplayBox, ViewMode, SynthProcess } from './RTVInterfaces';
 import { badgeBackground } from 'vs/platform/theme/common/colorRegistry';
 import { IThemeService } from 'vs/platform/theme/common/themeService';
 
 const SYNTHESIZING_MESSAGE: string = '# Please wait. Synthesizing...';
-
-class SynthProcess {
-	private _resolve?: (value: SynthResult) => void = undefined;
-	private _reject?: () => void = undefined;
-	private _problemIdx: number;
-	private process: Process;
-
-	constructor() {
-		this._problemIdx = -1;
-		this.process = utils.synthProcess();
-
-		// Set up the listeners we use to communicate with the synth
-		this.process.onStdout((data) => {
-			const resultStr = String.fromCharCode.apply(null, data);
-
-			if (this._resolve && this._reject) {
-				try {
-					// TODO Check result id
-					const rs = JSON.parse(resultStr) as SynthResult;
-					this._resolve(rs);
-					this._resolve = undefined;
-					this._reject = undefined;
-				} catch (e) {
-					console.error('Failed to parse synth output: ' + String.fromCharCode.apply(null, data));
-				}
-			} else {
-				console.error('Synth output when not waiting on promise: ');
-				console.error(resultStr);
-			}
-		});
-
-		this.process.onExit(() => {
-			// This REALLY shouldn't happen.
-			// TODO Make synthProcess check if the process is alive,
-			//   and if not, restart it.
-			this.process = utils.synthProcess();
-		});
-	}
-
-	public start(problem: SynthProblem): Promise<SynthResult> {
-		if (this._reject) {
-			this._reject();
-			this._resolve = undefined;
-			this._reject = undefined;
-		}
-
-		// First, create the promise we're returning.
-		const rs: Promise<SynthResult> = new Promise((resolve, reject) => {
-			this._resolve = resolve;
-			this._reject = reject;
-		});
-
-		// Then send the problem to the synth
-		problem.id = ++this._problemIdx;
-		this.process.toStdin(JSON.stringify(problem) + '\n');
-
-		// And we can return!
-		return rs;
-	}
-
-	public stop(): Boolean {
-		if (this._reject) {
-			// TODO Actually stop the synthesizer.
-			this._reject();
-			this._reject = undefined;
-			this._resolve = undefined;
-			return true;
-		}
-		return false;
-	}
-
-	public dispose() {
-		if (this._reject) {
-			this._reject();
-		}
-		this.process?.kill();
-	}
-}
 
 export class RTVSynth {
 	private logger: IRTVLogger;
@@ -97,6 +19,7 @@ export class RTVSynth {
 	row?: number = undefined;
 	lineno?: number = undefined;
 	box?: IRTVDisplayBox = undefined;
+	utils: Utils;
 	process: SynthProcess;
 	errorHover?: HTMLElement = undefined;
 	rowsValid?: boolean[];
@@ -106,8 +29,9 @@ export class RTVSynth {
 		private readonly controller: IRTVController,
 		@IThemeService readonly _themeService: IThemeService
 	) {
-		this.logger = utils.getLogger(editor);
-		this.process = new SynthProcess();
+		this.utils = getUtils();
+		this.logger = this.utils.logger(editor);
+		this.process = this.utils.synthesizer();
 		this.enabled = false;
 
 		// In case the user click's out of the boxes.
@@ -428,7 +352,7 @@ export class RTVSynth {
 			// Make sure the values are correct and up to date
 
 			// Check if value was valid
-			let error = await utils.validate(cell.textContent!);
+			let error = await this.utils.validate(cell.textContent!);
 
 			if (error) {
 				// Show error message if not
@@ -506,7 +430,7 @@ export class RTVSynth {
 		this.controller.changeViewMode(ViewMode.Cursor);
 
 		try {
-			const rs: SynthResult = await this.process.start(problem);
+			const rs: SynthResult = await this.process.synthesize(problem);
 			this.logger.synthResult(rs);
 			if (rs.success) {
 				this.insertSynthesizedFragment(rs.program!, this.lineno!);
@@ -669,14 +593,10 @@ export class RTVSynth {
 				}
 			}
 
-			let c = utils.runProgram(this.controller.getProgram(), values);
-			let errorMsg: string = '';
-			c.onStderr((msg) => {
-				errorMsg += msg;
-			});
-
-			const results: any = await c.toPromise();
-			const result = results[1];
+			let c = this.utils.runProgram(this.controller.getProgram(), values);
+			const results: RunResult = await c;
+			const errorMsg = results.stderr;
+			const result = results.result;
 
 			let parsedResult = JSON.parse(result);
 			let returnCode = parsedResult[0];
@@ -710,7 +630,7 @@ export class RTVSynth {
 		let defaults: string[] = [];
 
 		// We need to check the latest envs, so let's make sure it's up to date.
-		await this.controller.pythonProcess?.toPromise();
+		await this.controller.pythonProcess;
 
 		// See if the variable was defined before this statement.
 		// If yes, we can set the default value to itself!

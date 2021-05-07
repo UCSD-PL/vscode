@@ -22,6 +22,7 @@
 		"vs/editor/browser/widget/diffEditorWidget.ts",
 		"vs/editor/browser/widget/diffReview.ts",
 		"vs/editor/standalone/browser/colorizer.ts",
+		"vs/editor/contrib/rtv/RTVDisplay.ts",
 		"vs/workbench/api/worker/extHostExtensionService.ts",
 		"vs/workbench/contrib/notebook/browser/view/renderers/cellRenderer.ts",
 		"vs/workbench/contrib/notebook/browser/view/renderers/webviewPreloads.ts",

@@ -55,7 +55,7 @@ export interface IRTVController extends IEditorContribution {
 	getProgram(): string;
 	getModelForce(): ITextModel;
 	envs: { [k: string]: any[]; };
-	pythonProcess?: Process;
+	pythonProcess?: RunProcess;
 	onUpdateEvent: Event<BoxUpdateEvent>;
 
 	// Functions for running the program
@@ -198,36 +198,26 @@ export abstract class ARTVLogger implements IRTVLogger {
 	}
 }
 
-/**
- * A "Process" interface that lets us share the API
- * between the local and remote versions of RTVDisplay.
- */
-export interface Process {
-	onExit(fn: (exitCode: any, result?: string) => void): void;
-	onStdout(fn: (data: any) => void): void;
-	onStderr(fn: (data: any) => void): void;
-	toStdin(msg: string): void;
-	kill(): void;
-	toPromise(): Promise<any>;
+export interface Utils {
+	readonly EOL: string;
+	logger(editor: ICodeEditor): IRTVLogger;
+	runProgram(program: string, values?: any): RunProcess;
+	runImgSummary(program: string, line: number, varname: string): RunProcess;
+	validate(input: string): Promise<string | undefined>;
+	synthesizer(): SynthProcess;
 }
 
-
 /**
- * An empty implementation of Process. Can be used in place of the
- * actual process until initial setups are completed. Resolves
- * immediately.
- */
-export class EmptyProcess implements Process {
-	onExit(_fn: (exitCode: any, result?: string) => void): void {}
-	onStdout(_fn: (data: any) => void): void {}
-	onStderr(_fn: (data: any) => void): void {}
-	toStdin(msg: string): void {}
-	kill(): void {}
-	toPromise(): Promise<any> {
-		return new Promise((resolve) => {
-			resolve('[]');
-		});
-	}
+ * This class is used to return the result of running
+ * a run.py or img-summary.py file.
+ **/
+export class RunResult {
+	constructor(
+		public readonly stdout: string,
+		public readonly stderr: string,
+		public readonly exitCode: number | null,
+		public readonly result: any,
+	) {}
 }
 
 export class SynthResult {
@@ -246,6 +236,39 @@ export class SynthProblem {
 		public envs: any[]
 	) {}
 }
+
+/**
+ * A "Process" interface that lets us share the API
+ * between the local and remote versions of RTVDisplay.
+ */
+export interface RunProcess extends PromiseLike<RunResult> {
+	kill(): boolean;
+}
+
+export interface SynthProcess {
+	synthesize(problem: SynthProblem): Promise<SynthResult>;
+	stop(): boolean;
+	connected(): boolean;
+}
+
+
+/**
+ * An empty implementation of Process. Can be used in place of the
+ * actual process until initial setups are completed. Resolves
+ * immediately.
+ */
+// export class EmptyProcess implements Process {
+// 	onExit(_fn: (exitCode: any, result?: string) => void): void {}
+// 	onStdout(_fn: (data: any) => void): void {}
+// 	onStderr(_fn: (data: any) => void): void {}
+// 	toStdin(msg: string): void {}
+// 	kill(): void {}
+// 	toPromise(): Promise<any> {
+// 		return new Promise((resolve) => {
+// 			resolve('[]');
+// 		});
+// 	}
+// }
 
 /**
  * The Projection Box view modes.

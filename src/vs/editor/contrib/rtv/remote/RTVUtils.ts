@@ -1,4 +1,4 @@
-import { Process, IRTVController, IRTVLogger, EmptyProcess, ViewMode } from 'vs/editor/contrib/rtv/RTVInterfaces';
+import { IRTVLogger, Utils, RunProcess, RunResult, SynthProcess, SynthResult, SynthProblem } from 'vs/editor/contrib/rtv/RTVInterfaces';
 import { RTVLogger } from 'vs/editor/contrib/rtv/RTVLogger';
 import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
 
@@ -20,29 +20,10 @@ class IDGenerator {
 
 const idGen: IDGenerator = new IDGenerator();
 
-enum ResponseType {
-	// Responses related to the running program
-	STDOUT = 1,
-	STDERR = 2,
-	RESULT = 3,
-	EXCEPTION = 4,
-
-	// Responses related to the web worker itself
-	ERROR = 5,
-	LOADED = 6
-}
-
 enum RequestType {
 	RUNPY = 1,
 	IMGSUM = 2,
 	SNIPPY = 3,
-}
-
-class PyodideResponse {
-	constructor(
-		public id: number,
-		public type: ResponseType,
-		public msg: string) {}
 }
 
 abstract class PyodideRequest {
@@ -75,239 +56,47 @@ class ImgSumRequest extends PyodideRequest {
 	}
 }
 
-class SnipPyRequest extends PyodideRequest {
-	constructor(
-		public action: string,
-		public parameter: string,
-	) {
-		super(RequestType.SNIPPY);
-	}
-}
+class RemoteSynthProcess implements SynthProcess {
+	protected _controller = new AbortController();
 
-class PyodideProcess<R extends PyodideRequest> implements Process {
-	private id: number;
+	synthesize(problem: SynthProblem): Promise<SynthResult> {
+		// First cancel any previous call
+		this._controller.abort();
 
-	// Event listeners
-	private onResult?: ((exitCode: any, result?: string) => void) = undefined;
-	private onOutput?: ((data: any) => void) = undefined;
-	private onError?: ((data: any) => void) = undefined;
-
-	private result?: string = undefined;
-	private error: string = '';
-	private output: string = '';
-
-	private resolve?: (result: any) =>  void = undefined;
-
-	private killed: boolean = false;
-
-	private eventListener: (this: Worker, event: MessageEvent) => void;
-
-	constructor(request: R) {
-		this.id = request.id;
-		this.eventListener = (event: MessageEvent) =>
-		{
-			let msg: PyodideResponse = event.data;
-
-			if (msg.id !== this.id) {
-				return;
-			}
-
-			switch (msg.type)
-			{
-				case ResponseType.RESULT:
-					this.result = msg.msg;
-					if (this.onResult) {
-						this.onResult(this.result);
-					}
-					if (this.resolve) {
-						this.resolve(this.result);
-					}
-					break;
-				case ResponseType.STDOUT:
-					this.output += msg.msg;
-					break;
-				case ResponseType.STDERR:
-				case ResponseType.EXCEPTION:
-					this.error += msg.msg;
-					break;
-				default:
-					break;
-			}
-		};
-
-		pyodideWorker.addEventListener('message', this.eventListener);
-		pyodideWorker.postMessage(request);
-	}
-
-	onStdout(fn: (data: any) => void): void {
-		this.onOutput = fn;
-	}
-
-	onStderr(fn: (data: any) => void): void {
-		this.onError = fn;
-	}
-
-	toStdin(msg: string) {
-		// TODO Implement
-	}
-
-	kill() {
-		pyodideWorker.removeEventListener('message', this.eventListener);
-
-		if (this.onOutput && this.output) {
-			this.onOutput(this.output);
-		}
-
-		if (this.onError && this.error) {
-			this.onError(this.error);
-		}
-
-		if (this.onResult) {
-			this.onResult(0);
-		}
-
-		if (this.resolve) {
-			this.resolve('');
-		}
-
-		this.killed = true;
-	}
-
-	onExit(fn: (exitCode: any, result?: string) => void): void {
-		this.onResult = (result) => {
-			if (this.onOutput) {
-				this.onOutput(this.output);
-			}
-
-			if (this.onError) {
-				this.onError(this.error);
-			}
-
-			fn((result && result !== '') ? 0 : null, result);
-		};
-
-		if (this.result) {
-			this.onResult(this.result);
-		} else if (this.killed) {
-			this.onResult('');
-		}
-	}
-
-	toPromise(): Promise<any> {
-		return new Promise((resolve, _reject) => {
-			this.resolve = (result) => {
-				const rs = [(result && result !== '') ? 0 : null, result];
-
-				// TODO Delete me
-				console.log('Resolving request with:');
-				console.log(rs);
-
-				resolve(rs);
-			};
-
-			if (this.result) {
-				this.resolve(this.result);
-			} else if (this.killed) {
-				this.resolve('');
-			}
-		});
-	}
-}
-
-class SynthProcess implements Process {
-
-	private onResult?: ((exitCode: any, result?: string) => void) = undefined;
-	// private onOutput?: ((data: any) => void) = undefined;
-	private onError?: ((data: any) => void) = undefined;
-
-	private result?: string = undefined;
-	private error: string = '';
-	private promise: Promise<string | undefined>;
-	private abortController: AbortController;
-
-	constructor(problem: string) {
-		this.abortController = new AbortController();
-		const signal = this.abortController.signal;
-
-		this.promise = fetch(
+		return fetch(
 			'/synthesize',
 			{
 				method: 'POST',
-				body: problem,
+				body: JSON.stringify(problem),
+				signal: this._controller.signal,
 				mode: 'same-origin',
-				signal: signal
-			}).then(response => {
-			if (response && response.status < 200 || response.status >= 300 || response.redirected) {
-				// TODO Error handling
-				this.error = response.statusText;
-
-				if (this.onError) {
-					this.onError(this.error);
+				headers: headers()
+			}).
+			then(response => {
+				if (response && response.status < 200 || response.status >= 300 || response.redirected) {
+					// TODO Error handling
+					console.error(response);
 				}
 
-				return Promise.reject();
-			} else {
-				return response.text();
-			}
-		}).then(result => {
-			this.result = result;
-
-			if (this.onResult) {
-				this.onResult(0, this.result);
-			}
-
-			return result;
-		}).catch(error => {
-			// TODO Error handling
-			this.error = error;
-
-			if (this.onError) {
-				this.onError(error);
-			}
-
-			if (this.onResult) {
-				this.onResult(1, error);
-			}
-
-			return error;
-		});
+				return response.json();
+			}).
+			catch(err => {
+				// TODO Error handling
+				console.error(err);
+			});
 	}
 
-	onStdout(_fn: (data: any) => void): void {
-		// TODO Implement
+	stop(): boolean {
+		this._controller.abort();
+		return true;
 	}
 
-	toStdin(msg: string): void {
-		// TODO Implement
-	}
-
-	onStderr(fn: (data: any) => void): void {
-		this.onStderr = fn;
-
-		if (this.error) {
-			fn(this.error);
-		}
-	}
-
-	kill() {
-		// TODO What happens to the promise?
-		this.abortController.abort();
-	}
-
-	onExit(fn: (exitCode: any, result?: string) => void): void {
-		this.onResult = fn;
-
-		if (this.result) {
-			this.onResult(0, this.result);
-		}
-	}
-
-	toPromise(): Promise<any> {
-		return this.promise;
+	connected(): boolean {
+		return true;
 	}
 }
 
-function saveProgram(program: string) {
+function headers(): Headers {
 	// We need this for CSRF protection on the server
 	const csrfInput = document.getElementById('csrf-parameter') as HTMLInputElement;
 	const csrfToken = csrfInput.value;
@@ -317,139 +106,111 @@ function saveProgram(program: string) {
 	headers.append('Content-Type', 'text/plain;charset=UTF-8');
 	headers.append(csrfHeaderName, csrfToken);
 
-	fetch(
-		'/save',
-		{
-			method: 'POST',
-			body: program,
-			mode: 'same-origin',
-			headers: headers
-		}).
-		then(response => {
-			if (response && response.status < 200 || response.status >= 300 || response.redirected) {
-				// Lab time must have ended.
-				document.location.reload();
-			}
-		}).
-		catch(_ => {
-			document.location.reload();
-		});
+	return headers;
 }
 
-export function runProgram(program: string, values?: any): Process {
-	if (!pyodideLoaded) {
-		// @Hack: We want to ignore this call until pyodide has loaded.
-		return new EmptyProcess();
+class RemoteRunProcess implements RunProcess {
+	protected _promise: Promise<RunResult>;
+	protected _controller: AbortController = new AbortController();
+
+	constructor(
+		protected url: string,
+		protected body?: string,
+		protected method: string = 'POST',
+	) {
+		this._promise = fetch(
+			url,
+			{
+				method: method,
+				body: body,
+				signal: this._controller.signal,
+				mode: 'same-origin',
+				headers: headers()
+			}).
+			then(response => {
+				if (response && response.status < 200 || response.status >= 300 || response.redirected) {
+					// TODO Error handling
+					console.error(response);
+				}
+
+				return response.json();
+			});
+		this._promise.
+			catch(err => {
+				// TODO Error handling
+				console.error(err);
+			});
 	}
 
-	saveProgram(program);
-
-	values = JSON.stringify(values);
-	return new PyodideProcess(new RunpyRequest(program, values));
-}
-
-export function synthesizeSnippet(problem: string): Process {
-	return new SynthProcess(problem);
-}
-
-export function runImgSummary(program: string, line: number, varname: string): Process {
-	if (!pyodideLoaded) {
-		// @Hack: We want to ignore this call until pyodide has loaded.
-		return new EmptyProcess();
+	kill(): boolean {
+		this._controller.abort();
+		return true;
 	}
 
-	return new PyodideProcess(new ImgSumRequest(program, line, varname));
-}
-/**
- * Runs the SnipPy helper python code with a request to validate the
- * given user input.
- */
-export async function validate(input: string): Promise<string | undefined> {
-	let process = new PyodideProcess(new SnipPyRequest('validate', input));
-	let results = (await process.toPromise())[1];
+	async then<TResult1 = RunResult, TResult2 = never>(
+		onfulfilled?: ((value: RunResult) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+		onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): Promise<TResult1 | TResult2> {
+		return this._promise.then(onfulfilled, onrejected);
+	}
 
-	return results;
-}
-
-export function getLogger(editor: ICodeEditor): IRTVLogger {
-	return new RTVLogger(editor);
+	async catch<TResult = never>(
+		onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): Promise<any | TResult> {
+		return this._promise.catch(onrejected);
+	}
 }
 
-// Assuming the server is running on a unix system
-export const EOL: string = '\n';
 
-/**
- * Don't allow switching views unless we find the set cookie
- */
-export function isViewModeAllowed(m: ViewMode): boolean {
-	let rs: boolean = false;
+class RemoteUtils implements Utils {
+	readonly EOL: string = '\n'; // Assuming the server is running on a unix system
+	protected _logger?: IRTVLogger;
+	protected _synthProcess = new RemoteSynthProcess();
 
-	if (!studyGroup) {
-		for (let cookie of document.cookie.split(';')) {
-			cookie = cookie.trim();
-			if (cookie.startsWith('USER_STUDY_GROUP')) {
-				studyGroup = cookie.slice('USER_STUDY_GROUP'.length + 1);
-			}
+	logger(editor: ICodeEditor): IRTVLogger {
+		if (!this._logger) {
+			this._logger = new RTVLogger(editor);
 		}
+		return this._logger;
 	}
 
-	switch (studyGroup) {
-		case 'None':
-			rs = true;
-			break;
-		case 'GroupOne':
-			rs = m === ViewMode.Full || m === ViewMode.CursorAndReturn;
-			break;
-		case 'GroupTwo':
-			rs = m === ViewMode.Stealth;
-			break;
-		default:
-			console.error('USER_STUDY_GROUP cookie not recognized: ' + studyGroup);
-			rs = m === ViewMode.Stealth;
-			break;
+	runProgram(program: string, values?: any): RunProcess {
+		const url = '/runPy';
+		const body = JSON.stringify(new RunpyRequest(program, values));
+		return new RemoteRunProcess(url, body);
 	}
 
-	if (rs) {
-		// Set the expiration to one hour
-		let time: Date = new Date();
-		time.setTime(time.getTime() + 60 * 60 * 1000);
-		document.cookie = `PROJECTION_BOX_VIEW=${m.toString()};expires=${time.toUTCString()};`;
+	runImgSummary(program: string, line: number, varname: string): RunProcess {
+		const url = '/imgSummary';
+		const body = JSON.stringify(new ImgSumRequest(program, line, varname));
+		return new RemoteRunProcess(url, body);
 	}
 
-	return rs;
+	async validate(input: string): Promise<string | undefined> {
+		let rs = fetch(
+			'/validate',
+			{
+				method: 'POST',
+				body: input,
+				mode: 'same-origin',
+				headers: headers()
+			}).
+			then(response => {
+				if (response && response.status < 200 || response.status >= 300 || response.redirected) {
+					// TODO Error handling
+					console.error(response);
+				}
+
+				return response.text();
+			});
+		rs.catch(err => console.error(err));
+		return rs;
+	}
+
+	synthesizer(): SynthProcess {
+		return this._synthProcess;
+	}
 }
 
-// Used to cache the results
-let studyGroup: string | undefined = undefined;
-
-// Start the web worker
-const pyodideWorker = new Worker('/pyodide/webworker.js');
-let pyodideLoaded = false;
-
-const pyodideWorkerInitListener = (event: MessageEvent) =>
-{
-	let msg = event.data as PyodideResponse;
-
-	if (msg.type === ResponseType.LOADED)
-	{
-		console.log('Pyodide loaded!');
-		pyodideLoaded = true;
-		pyodideWorker.removeEventListener('message', pyodideWorkerInitListener);
-
-		const program = window.editor.getModel()!!.getLinesContent().join('\n');
-		runProgram(program).onExit((_code, _result) =>
-		{
-			(window.editor.getContribution('editor.contrib.rtv') as IRTVController).updateBoxes();
-			(document.getElementById('spinner') as HTMLInputElement).style.display = 'none';
-		});
-	}
-	else
-	{
-		console.error('First message from pyodide worker was not a load message!');
-		console.error(msg.type);
-		console.error(ResponseType.LOADED);
-	}
-};
-
-pyodideWorker.onerror = console.error;
-pyodideWorker.addEventListener('message', pyodideWorkerInitListener);
+let utils = new RemoteUtils();
+export function getUtils(): Utils {
+	return utils;
+}
