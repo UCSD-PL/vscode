@@ -91,6 +91,9 @@ const extractEditorSrcTask = task.define('extract-editor-src', () => {
 		redirects: []
 	});
 
+	// HACK `extractEditor` above removes the `then` function for some reason
+	fs.copyFileSync(rtv + 'RTVUtils.ts', 'out-editor-src/vs/editor/contrib/rtv/RTVUtils.ts');
+
 	// Return the original utils
 	fs.unlinkSync(rtv + 'RTVUtils.ts');
 	fs.unlinkSync(rtv + 'RTVLogger.ts');

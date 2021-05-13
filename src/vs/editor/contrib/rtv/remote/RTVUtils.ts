@@ -36,8 +36,8 @@ class RunpyRequest extends PyodideRequest {
 	public name: string;
 
 	constructor(
-		public content: string,
-		public values?: string
+		public program: string,
+		public values?: any
 	) {
 		super(RequestType.RUNPY);
 		this.name = `program_${this.id}.py`;
@@ -59,7 +59,7 @@ class ImgSumRequest extends PyodideRequest {
 class RemoteSynthProcess implements SynthProcess {
 	protected _controller = new AbortController();
 
-	synthesize(problem: SynthProblem): Promise<SynthResult> {
+	async synthesize(problem: SynthProblem): Promise<SynthResult> {
 		// First cancel any previous call
 		this._controller.abort();
 
@@ -97,14 +97,16 @@ class RemoteSynthProcess implements SynthProcess {
 }
 
 function headers(): Headers {
+	const headers = new Headers();
+	headers.append('Content-Type', 'application/json;charset=UTF-8');
+
 	// We need this for CSRF protection on the server
 	const csrfInput = document.getElementById('csrf-parameter') as HTMLInputElement;
 	const csrfToken = csrfInput.value;
 	const csrfHeaderName = csrfInput.name;
-
-	const headers = new Headers();
-	headers.append('Content-Type', 'text/plain;charset=UTF-8');
-	headers.append(csrfHeaderName, csrfToken);
+	if (csrfHeaderName) {
+		headers.append(csrfHeaderName, csrfToken);
+	}
 
 	return headers;
 }
@@ -124,7 +126,7 @@ class RemoteRunProcess implements RunProcess {
 				method: method,
 				body: body,
 				signal: this._controller.signal,
-				mode: 'same-origin',
+				// mode: 'cors',
 				headers: headers()
 			}).
 			then(response => {
@@ -147,16 +149,25 @@ class RemoteRunProcess implements RunProcess {
 		return true;
 	}
 
-	async then<TResult1 = RunResult, TResult2 = never>(
+	then<TResult1>(
 		onfulfilled?: ((value: RunResult) => TResult1 | PromiseLike<TResult1>) | undefined | null,
-		onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null): Promise<TResult1 | TResult2> {
+		onrejected?: ((reason: any) => never | PromiseLike<never>) | undefined | null): PromiseLike<TResult1 | never>
+	{
 		return this._promise.then(onfulfilled, onrejected);
 	}
 
-	async catch<TResult = never>(
-		onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): Promise<any | TResult> {
-		return this._promise.catch(onrejected);
-	}
+	// WTF?!!
+	// then<TResult1>(
+	// 	onfulfilled?: ((value: RunResult) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+	// 	onrejected?: ((reason: any) => never | PromiseLike<never>) | undefined | null): PromiseLike<TResult1 | never>
+	// {
+	// 	return this._promise.then(onfulfilled, onrejected);
+	// }
+
+	// catch<TResult = never>(
+	// 	onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null): Promise<any | TResult> {
+	// 	return this._promise.catch(onrejected);
+	// }
 }
 
 
