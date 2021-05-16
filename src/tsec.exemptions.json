@@ -31,6 +31,8 @@
 	],
 	"ban-worker-calls": [
 		"vs/base/worker/defaultWorkerFactory.ts",
-		"vs/workbench/services/extensions/browser/webWorkerExtensionHost.ts"
+		"vs/workbench/services/extensions/browser/webWorkerExtensionHost.ts",
+		"vs/editor/contrib/rtv/RTVUtils.ts",
+		"vs/editor/contrib/rtv/remote/RTVUtils.ts"
 	]
 }

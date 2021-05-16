@@ -216,7 +216,7 @@ export class RunResult {
 		public readonly stdout: string,
 		public readonly stderr: string,
 		public readonly exitCode: number | null,
-		public readonly result: any,
+		public readonly result: string | undefined,
 	) {}
 }
 

@@ -598,6 +598,11 @@ export class RTVSynth {
 			const errorMsg = results.stderr;
 			const result = results.result;
 
+			if (!result) {
+				console.error('Failed to run program');
+				return 'Error: Failed to run program.';
+			}
+
 			let parsedResult = JSON.parse(result);
 			let returnCode = parsedResult[0];
 
